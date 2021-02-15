@@ -14,25 +14,29 @@
 # consisting of roads listed on the webpage, their current conditions, and
 # respective geometry is created and placed in an outputs sub directory
 
-## TO DO:
-
-## 2)  TRY / CATCH STATEMENT FOR SOMETHING.
-
+##Note on external data set:
+##
+##This script requires a gis shapefile of utah roads to run correctly. The
+##script is currently bundled with a subset of southern utah roads within
+##a 10 mile buffer of GSENM bounds. The included subset was created with
+##ArcGIS Pro. Data was provided by: https://gis.utah.gov/
 
 
 #external libraries
 import geopandas as gpd
 import arcpy
 import pandas as pd
+import os
 import matplotlib.pyplot as plt
 from urllib.request import urlopen
 from bs4 import BeautifulSoup
-
+import gs_plotter
 
 #input
 #html = "gsenm.html"  # local copy for testing
 url ="https://www.nps.gov/glca/learn/news/road-conditions.htm"
-out_dir = "output/"
+out_dir = "output"
+out_file_name = "conditions.shp"
 infc = "roads/gsenm_road_10mi_buffer.shp"
 infcFields = ["SHAPE@","FULLNAME", "CARTOCODE", "DOT_CLASS"]
 
@@ -40,6 +44,11 @@ infcFields = ["SHAPE@","FULLNAME", "CARTOCODE", "DOT_CLASS"]
 sr = arcpy.Describe(infc).spatialReference
 arcpy.env.outputCoordinateSystem = sr
 arcpy.env.overwriteOutput = True
+
+
+#check to see if the directory /output exists, if not, make it.
+if not os.path.exists(out_dir):
+    os.makedirs(out_dir)
 
 # this function takes the lowercase road as on the website (sometimes misspelled)
 # and will switch it to match the road name actually found in the utah GIS roads file
@@ -107,94 +116,82 @@ df2 = df[df.road_name != 'Name'].copy()
 df2.reset_index(drop=True, inplace=True)
 
 
-clearance_list = {'2WD':0, '2WD High Clearance':1, '2WD, 4WD':2, '2WD, 4WD High Clearance':3, '4WD':4, '4WD High Clearance':5,'Impassable':6, '2WD, 4WD HighClearance':3}
+clearance_list = {'2WD':0, '2WD High Clearance':1, '2WD, 4WD':2, '2WD, 4WD High Clearance':3, '4WD':4, '4WD High Clearance':5,'Impassable':6, '2WD, 4WD HighClearance':3, '2WD, 2WD HighClearance':1}
 #print(clearance_list)
 
+try:
+    road_rating = []
+    for row in df2['clearance']:
+        road_rating.append(clearance_list[row])
+    df2['road_rating']=road_rating
+except Exception as e:
+    print("An error occurred loading clearance ratings.")
+    print(e)
+else:
 
-road_rating = []
-for row in df2['clearance']:
-    road_rating.append(clearance_list[row])
-df2['road_rating']=road_rating
-
-
-
-tempdf = df2['road_name'].apply(web_to_gis)
-df2['gis'] = tempdf
-#print(df2)
-final_df=df2[df2['gis']!='oops']    # here is where we ignore oops roads we can't find
-#print(final_df)
-
-
-
-
-print("Creating new featureClass...")
-## create an empy feature class with all the proper validated field names   "POLYLINE"
-newFC = arcpy.CreateFeatureclass_management(out_dir, "conditions.shp", 'POLYLINE')
-
-#field validation
-validFIPS = arcpy.ValidateFieldName("FIPS_road")
-validRoadName = arcpy.ValidateFieldName("FULLNAME")
-validComments = arcpy.ValidateFieldName("comments")
-validDate = arcpy.ValidateFieldName("last_updated")
-validClearance = arcpy.ValidateFieldName("clearance")
-validRating = arcpy.ValidateFieldName("rating")
-validCarto = arcpy.ValidateFieldName("CARTOCODE")
-validDotClass = arcpy.ValidateFieldName("DOT_CLASS")
+    tempdf = df2['road_name'].apply(web_to_gis)
+    df2['gis'] = tempdf
+    #print(df2)
+    final_df=df2[df2['gis']!='oops']    # here is where we ignore oops roads we can't find
+    #print(final_df)
 
 
-#add fields to new featureclass
-arcpy.AddField_management(newFC, validRoadName ,"TEXT")
-arcpy.AddField_management(newFC, validCarto, "TEXT")
-arcpy.AddField_management(newFC, validDotClass, "TEXT")
-arcpy.AddField_management(newFC, validComments ,"TEXT")
-arcpy.AddField_management(newFC, validDate ,"TEXT")
-arcpy.AddField_management(newFC, validClearance,"TEXT")
-arcpy.AddField_management(newFC, validRating ,"LONG")
-
-                          
-
-#insert cursor for featureclass
-#insert = arcpy.da.InsertCursor(newFC, [validRoadName, validDate, validClearance, validComments, validRating])
-
-insert = arcpy.da.InsertCursor(newFC, ['SHAPE@', validRoadName, validCarto, validDotClass, validComments, validDate, validClearance, validRating])
-
-# Enter for loop for each row on our utah roads shapefile
-print("Populating feature Class...")
-for inrow in arcpy.da.SearchCursor(infc, infcFields):
-    shape = inrow[0]
-    full_name = inrow[1]
-    carto = inrow[2]
-    dotclass = inrow[3]
-    for row in final_df.iterrows():
-        row_list=[]
-        if full_name == row[1][5]:
-            comment = row[1][3]
-            clearance = row[1][2]
-            rating = row[1][4]
-            last_update = row[1][4]
-            row_list = [shape, full_name, carto, dotclass, comment, last_update, clearance, rating]
-            #print(row_list)
-            insert.insertRow(row_list)
-
-del insert
 
 
-## export a quick map of our shapefile, with gsenm roads subset and bounds
-#import the shape files
-bounds = gpd.read_file('gsenm-bounds/gsenm-bounds.shp')
-roads = gpd.read_file('roads/GSENM_roads.shp')
-conditions = gpd.read_file('output/conditions.shp')
+    print("Creating new featureClass...")
+    ## create an empy feature class with all the proper validated field names   "POLYLINE"
+    newFC = arcpy.CreateFeatureclass_management(out_dir, out_file_name, 'POLYLINE')
 
-#set up the plot
-fig, ax = plt.subplots(figsize=(8,8))
-ax.set_aspect('equal')
+    #field validation
+    validFIPS = arcpy.ValidateFieldName("FIPS_road")
+    validRoadName = arcpy.ValidateFieldName("FULLNAME")
+    validComments = arcpy.ValidateFieldName("comments")
+    validDate = arcpy.ValidateFieldName("last_updated")
+    validClearance = arcpy.ValidateFieldName("clearance")
+    validRating = arcpy.ValidateFieldName("rating")
+    validCarto = arcpy.ValidateFieldName("CARTOCODE")
+    validDotClass = arcpy.ValidateFieldName("DOT_CLASS")
 
-#plot the shape files
-bounds.plot(ax=ax, color='white', edgecolor='brown', linewidth=2);
-roads.plot(ax=ax, color='gray');
-conditions.plot(ax=ax, linewidth =2, color="blue")
 
-#save the plot
-plt.title("Roads in the conditions shapefile", fontsize=12)
-plt.axis('off')
-plt.savefig('output/gsenm-roads.png', dpi=72)
+    #add fields to new featureclass
+    arcpy.AddField_management(newFC, validRoadName ,"TEXT")
+    arcpy.AddField_management(newFC, validCarto, "TEXT")
+    arcpy.AddField_management(newFC, validDotClass, "TEXT")
+    arcpy.AddField_management(newFC, validComments ,"TEXT")
+    arcpy.AddField_management(newFC, validDate ,"TEXT")
+    arcpy.AddField_management(newFC, validClearance,"TEXT")
+    arcpy.AddField_management(newFC, validRating ,"LONG")
+
+                              
+
+    #insert cursor for featureclass
+    #insert = arcpy.da.InsertCursor(newFC, [validRoadName, validDate, validClearance, validComments, validRating])
+
+    insert = arcpy.da.InsertCursor(newFC, ['SHAPE@', validRoadName, validCarto, validDotClass, validComments, validDate, validClearance, validRating])
+
+    # Enter for loop for each row on our utah roads shapefile
+    print("Populating feature Class...")
+    for inrow in arcpy.da.SearchCursor(infc, infcFields):
+        shape = inrow[0]
+        full_name = inrow[1]
+        carto = inrow[2]
+        dotclass = inrow[3]
+        for row in final_df.iterrows():
+            row_list=[]
+            if full_name == row[1][5]:
+                comment = row[1][3]
+                clearance = row[1][2]
+                rating = row[1][4]
+                last_update = row[1][4]
+                row_list = [shape, full_name, carto, dotclass, comment, last_update, clearance, rating]
+                #print(row_list)
+                insert.insertRow(row_list)
+
+    del insert
+
+    #generate a plot from the file we just made, using another script i wrote
+    if os.path.exists(os.path.join(out_dir, out_file_name)):
+        print("Generating plot...")
+        gs_plotter.plot_map(os.path.join(out_dir,out_file_name))
+
+   
